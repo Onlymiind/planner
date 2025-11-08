@@ -1,9 +1,9 @@
 from bisect import bisect_left
+from datetime import timedelta
 from math import ceil, inf
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import pandas as pd
-import math
 
 # All time values are in minutes
 # Storing them as ints/float is MUCH simpler
@@ -39,14 +39,16 @@ class TimePeriod:
 
 
 class Group:
+    name: str
     count: int
     next_available: int
     limit: TimePeriod
     activity: str
 
-    def __init__(self, count: int, activity: str, limit: TimePeriod) -> None:
+    def __init__(self, name: str, count: int, activity: str, limit: TimePeriod) -> None:
         if count <= 0:
             raise ValueError(f"group count must be positive, got {count}")
+        self.name = name
         self.count = count
         self.next_available = limit.start
         self.limit = limit
@@ -54,9 +56,11 @@ class Group:
 
 
 class Court:
+    name: str
     time_available: list[TimePeriod]
 
-    def __init__(self, available: list[TimePeriod]) -> None:
+    def __init__(self, name: str, available: list[TimePeriod]) -> None:
+        self.name = name
         self.time_available = available
         self.time_available.sort()
 
@@ -106,6 +110,7 @@ class Court:
 
 class TimetableEntry(NamedTuple):
     group_idx: int
+    court_idx: int
     period: TimePeriod
 
 
@@ -133,13 +138,11 @@ class Solver:
         self.stage_limits = stage_limits
         self.activity_durations = activity_durations
 
-    def find_timetable(self) -> list[list[TimetableEntry]] | None:
+    def find_timetable(self) -> list[TimetableEntry] | None:
         if len(self.courts) == 0 or len(self.groups) == 0:
             return None
 
-        timetable: list[list[TimetableEntry]] = []
-        for i in range(0, len(self.courts)):
-            timetable.append([])
+        timetable: list[TimetableEntry] = []
         if self._find_timetable_recursive(0, timetable) is not None:
             return None
         return timetable
@@ -156,7 +159,7 @@ class Solver:
         )
 
     def _find_timetable_recursive(
-        self, idx: int, timetable: list[list[TimetableEntry]]
+        self, idx: int, timetable: list[TimetableEntry]
     ) -> TimetableEntry | None:
         """
         recursively builds timetable, records it on success
@@ -176,7 +179,7 @@ class Solver:
         duration: int = self._get_performace_time(group)
 
         fail_result = TimetableEntry(
-            period=TimePeriod(group.next_available, group.limit.end), group_idx=idx
+            period=TimePeriod(group.next_available, group.limit.end), group_idx=idx, court_idx=0
         )
         for start in range(group.next_available, group.limit.end):
             if start + duration > group.limit.end:
@@ -196,8 +199,8 @@ class Solver:
                 )
 
                 if result is None:
-                    timetable[court_idx].append(
-                        TimetableEntry(period=booked_period, group_idx=idx)
+                    timetable.append(
+                        TimetableEntry(period=booked_period, group_idx=idx, court_idx=court_idx)
                     )
                     return None
 
@@ -220,6 +223,48 @@ class Solver:
         return fail_result
 
 
+def generate_schedule(args: dict) -> dict[str, Any] | None:
+    OPTIONS_KEY = 'options'
+    LAST_UPLOAD_KEY = 'lastUploadPath'
+    WINDOW_KEY = 'window'
+    DATE_KEY = 'date'
+
+    if OPTIONS_KEY not in args or not isinstance(args[OPTIONS_KEY], dict):
+        return None
+    options = args[OPTIONS_KEY]
+    if LAST_UPLOAD_KEY not in options or not isinstance(options[LAST_UPLOAD_KEY], str):
+        return None
+
+    if WINDOW_KEY not in args or not isinstance(args[WINDOW_KEY], dict):
+        return None
+    window = args['window']
+    if DATE_KEY not in window or not isinstance(window[DATE_KEY], str):
+        return None
+
+    date = window[DATE_KEY]
+    rest_time = int(args.get('restTime', 0))
+    evaluate_time = int(args.get('evaluateTime', 0))
+
+    info = parse_excel(options[LAST_UPLOAD_KEY])
+    planner = Solver(info.groups, info.courts, rest_time, evaluate_time, info.stage_limits, info.activity_durations)
+
+    timetable = planner.find_timetable()
+    if timetable is None:
+        return None
+
+    result: dict[str, Any] = {'date': date, 'slots': []}
+    for slot in timetable:
+        result['slots'].append({
+            'start': str(timedelta(minutes=slot.period.start)),
+            'end': str(timedelta(minutes=slot.period.end)),
+            'courtId': planner.courts[slot.court_idx].name,
+            'groupId': planner.groups[slot.group_idx].name,
+            'item': planner.groups[slot.group_idx].activity,
+            'judge': '',
+            'comment': ''
+        })
+    return result
+
 class InputInfo(NamedTuple):
     activity_durations: dict[str, float]
     courts: list[Court]
@@ -233,25 +278,26 @@ def parse_excel(path: str) -> InputInfo:
     activity_durations: dict[str, float] = { str(getattr(row, 'Название')): int(getattr(row, 'Длительность')) for row in books['Упражнения'].itertuples() }
     stage_limits: list[int] = [ int(getattr(row, 'МаксимумУчастников')) for row in books['Этапы'].iterrows() ]
 
-    min_start: float = math.inf
+    min_start: float = inf
     max_end: int = 0
     courts_dict: dict[str, list[TimePeriod]] = {}
     for row in books['Корты'].itertuples():
-        id = getattr(row, 'Корт')
+        id = str(getattr(row, 'Корт'))
         start = ceil(pd.to_timedelta(getattr(row, 'Открытие')).total_seconds() / 60)
         end = int(pd.to_timedelta(getattr(row, 'Закрытие')).total_seconds() / 60)
         courts_dict.setdefault(id, []).append(TimePeriod(start, end))
         min_start = min(min_start, start)
         max_end = max(max_end, end)
-    courts = [Court(periods) for periods in courts_dict.values()]
+    courts = [Court(name, periods) for name, periods in courts_dict.items()]
 
     books['Группы'].fillna({'МинимальноеВремяНачала': int(min_start), 'МаксимальноеВремяОкончания': max_end})
     groups: list[Group] = []
     for row in books['Группы'].itertuples():
+        name = str(getattr(row, 'ИмяГруппы'))
         count = int(getattr(row, 'КоличествоУчастников'))
         activity = str(getattr(row, 'Упражнение'))
         start = int(getattr(row, 'МинимальноеВремяНачала'))
         end = int(getattr(row, 'МаксимальноеВремяОкончания'))
-        groups.append(Group(count, activity, TimePeriod(start, end)))
+        groups.append(Group(name, count, activity, TimePeriod(start, end)))
 
     return InputInfo(groups=groups, courts=courts, activity_durations=activity_durations, stage_limits=stage_limits)
