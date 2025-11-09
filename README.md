@@ -28,7 +28,7 @@ uvicorn api_adapter:app --reload --port 8000
 ### 3. Запуск фронтенда
 
 ```bash
-cd frontend
+cd planner/frontend
 npm install
 npm run dev
 ```
@@ -98,8 +98,8 @@ Excel-файл должен содержать следующие листы:
 ## Сборка фронтенда
 
 ```bash
-cd frontend
+cd planner/frontend
 npm run build
 ```
 
-Результат в `frontend/dist`.
+Результат в `planner/frontend/dist`.
