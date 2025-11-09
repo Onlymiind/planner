@@ -70,7 +70,7 @@ class Court:
             return False
         if (
             self.time_available[idx].start > period.start
-            or self.time_available[idx] < period.end
+            or self.time_available[idx].end < period.end
         ):
             return False
 
@@ -276,7 +276,7 @@ def parse_excel(path: str) -> InputInfo:
     books = pd.read_excel(path, sheet_name=None)
 
     activity_durations: dict[str, float] = { str(getattr(row, 'Название')): int(getattr(row, 'Длительность')) for row in books['Упражнения'].itertuples() }
-    stage_limits: list[int] = [ int(getattr(row, 'МаксимумУчастников')) for row in books['Этапы'].iterrows() ]
+    stage_limits: list[int] = [ int(getattr(row[1], 'МаксимумУчастников')) for row in books['Этапы'].iterrows() ]
 
     min_start: float = inf
     max_end: int = 0
@@ -290,7 +290,7 @@ def parse_excel(path: str) -> InputInfo:
         max_end = max(max_end, end)
     courts = [Court(name, periods) for name, periods in courts_dict.items()]
 
-    books['Группы'].fillna({'МинимальноеВремяНачала': int(min_start), 'МаксимальноеВремяОкончания': max_end})
+    books['Группы'] = books['Группы'].fillna({'МинимальноеВремяНачала': int(min_start), 'МаксимальноеВремяОкончания': max_end})
     groups: list[Group] = []
     for row in books['Группы'].itertuples():
         name = str(getattr(row, 'ИмяГруппы'))
