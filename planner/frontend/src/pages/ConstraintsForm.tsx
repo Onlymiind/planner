@@ -6,19 +6,8 @@ import ErrorBanner from "../components/ErrorBanner";
 
 const defaultReq: PlanRequest = {
   window: { date: "2025-10-04", startTime: "09:30", endTime: "17:00" },
-  courts: [{ id: "c1", name: "Зал 1" }, { id: "c2", name: "Зал 2" }],
-  groups: [
-    { id: "g1", name: "Мужчины инд.", size: 20, tags:["мужчины"] },
-    { id: "g2", name: "Женщины инд.", size: 18, tags:["женщины"] },
-    { id: "g3", name: "Смешанные двойки", size: 10, tags:["смешанные"] },
-  ],
   slotMinutes: 15,
   parallelLimit: 2,
-  constraints: [
-    { groupId:"g1", earliestStart:"10:00", minBreakMinutes:5 },
-    { groupId:"g2", latestEnd:"16:00" },
-    { groupId:"g3", notOverlapWith:["g1","g2"] }
-  ],
   options: {}
 };
 

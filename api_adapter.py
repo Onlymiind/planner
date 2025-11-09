@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 
 app = FastAPI(title="Planner Adapter", version="1.1.0")
 app.add_middleware(
@@ -24,37 +24,11 @@ class TimeWindow(BaseModel):
     startTime: str
     endTime: str
 
-class Court(BaseModel):
-    id: str
-    name: str
-
-class Group(BaseModel):
-    id: str
-    name: str
-    size: int = 0
-    tags: List[str] = []
-
-class Constraint(BaseModel):
-    groupId: Optional[str] = None
-    notOverlapWith: List[str] = []
-    earliestStart: Optional[str] = None
-    latestEnd: Optional[str] = None
-    minBreakMinutes: int = 0
-
 class PlanRequest(BaseModel):
     window: TimeWindow
-    courts: List[Court]
-    groups: List[Group]
     slotMinutes: int = Field(15, ge=5, le=180)
     parallelLimit: int = Field(1, ge=1)
-    constraints: List[Constraint] = []
     options: Dict[str, Any] = {}
-
-    @validator("courts", "groups")
-    def non_empty(cls, v):
-        if not v:
-            raise ValueError("Список не может быть пустым")
-        return v
 
 class Slot(BaseModel):
     start: str
@@ -122,6 +96,28 @@ def min_to_hhmm(x: int) -> str:
     m = x % 60
     return f"{h:02d}:{m:02d}"
 
+def timedelta_to_hhmm(td_str: str) -> str:
+    """
+    Преобразует формат времени из timedelta (например "9:30:00" или "09:30:00") в HH:MM (например "09:30").
+    Если время уже в формате HH:MM, возвращает его без изменений.
+    """
+    if not td_str:
+        return td_str
+    
+    parts = td_str.split(":")
+    if len(parts) >= 2:
+        try:
+            h = int(parts[0])
+            m = int(parts[1])
+            # Если уже в формате HH:MM (2 части), возвращаем как есть
+            if len(parts) == 2:
+                return f"{h:02d}:{m:02d}"
+            # Если в формате H:MM:SS или HH:MM:SS (3 части), преобразуем в HH:MM
+            return f"{h:02d}:{m:02d}"
+        except (ValueError, IndexError):
+            return td_str
+    return td_str
+
 # РОУТЫ
 @app.get("/health")
 def health():
@@ -142,10 +138,20 @@ def schedule_plan(req: PlanRequest):
     params = req.dict()
     params.setdefault("options", {})
     params["options"]["lastUploadPath"] = next(iter(UPLOADS.values()), None)
+    # Добавляем параметры restTime и evaluateTime, если они не указаны (по умолчанию 0)
+    params.setdefault("restTime", 0)
+    params.setdefault("evaluateTime", 0)
 
     raw = call_planner(params)
 
     slots = raw.get("slots") or []
+    # Преобразуем формат времени из timedelta ("9:30:00") в HH:MM ("09:30")
+    for slot in slots:
+        if "start" in slot:
+            slot["start"] = timedelta_to_hhmm(slot["start"])
+        if "end" in slot:
+            slot["end"] = timedelta_to_hhmm(slot["end"])
+    
     date = raw.get("date", req.window.date)
     plan_id = str(uuid.uuid4())
     resp = {"id": plan_id, "date": date, "slots": slots}
