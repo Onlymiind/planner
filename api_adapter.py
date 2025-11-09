@@ -87,9 +87,13 @@ def call_planner(params: Dict[str, Any]) -> Dict[str, Any]:
                 result = fn(params)
                 if isinstance(result, str):
                     result = json.loads(result)
+                if result is None:
+                    raise HTTPException(status_code=400, detail="Не удалось построить расписание с заданными ограничениями")
                 if not isinstance(result, dict):
-                    raise RuntimeError("planner returned non-dict")
+                    raise HTTPException(status_code=500, detail="planner returned non-dict")
                 return result
+    except HTTPException:
+        raise
     except Exception:
         # падаем в CLI режим
         pass
@@ -118,48 +122,6 @@ def min_to_hhmm(x: int) -> str:
     m = x % 60
     return f"{h:02d}:{m:02d}"
 
-def naive_build(params: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Наивный планировщик-заглушка:
-    - идём по группам, для каждой создаём N слотов (N = size, минимум 1),
-      длительность slotMinutes, раскладываем по площадкам в round-robin;
-    - по завершении круга по всем площадкам увеличиваем время.
-    - ограничений не соблюдает — только чтобы UI работал.
-    """
-    win = params["window"]
-    courts = params["courts"]
-    groups = params["groups"]
-    slot_min = int(params.get("slotMinutes", 15))
-
-    start = hhmm_to_min(win["startTime"])
-    end_limit = hhmm_to_min(win["endTime"])
-
-    cur_time = start
-    court_idx = 0
-    slots: List[Dict[str, Any]] = []
-
-    for g in groups:
-        need = int(g.get("size") or 1)
-        need = max(1, min(need, 200))  # ограничим, чтобы не взорваться
-        for i in range(need):
-            if cur_time + slot_min > end_limit:
-                # дошли до конца окна — прекращаем
-                break
-            court = courts[court_idx % len(courts)]
-            s = {
-                "start": min_to_hhmm(cur_time),
-                "end": min_to_hhmm(cur_time + slot_min),
-                "courtId": court["id"],
-                "groupId": g["id"],
-                "item": g.get("name"),
-            }
-            slots.append(s)
-            court_idx += 1
-            if court_idx % len(courts) == 0:
-                cur_time += slot_min  # новая дорожка во времени
-
-    return {"date": win["date"], "slots": slots}
-
 # РОУТЫ
 @app.get("/health")
 def health():
@@ -181,11 +143,7 @@ def schedule_plan(req: PlanRequest):
     params.setdefault("options", {})
     params["options"]["lastUploadPath"] = next(iter(UPLOADS.values()), None)
 
-    try:
-        raw = call_planner(params)
-    except HTTPException:
-        # planner не отдал JSON / упал -> fallback
-        raw = naive_build(params)
+    raw = call_planner(params)
 
     slots = raw.get("slots") or []
     date = raw.get("date", req.window.date)
